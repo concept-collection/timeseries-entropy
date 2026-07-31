@@ -1,11 +1,14 @@
 """Command-line interface: timeseries-entropy [options]."""
 
 import argparse
+import os
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 
 from . import estimate_conditional_entropy, level_corrections, kernels
 from .model import ConditionalChain
+from .theory import predict_entropy_rate
 
 
 def design_kernel(args):
@@ -56,6 +59,8 @@ def main():
                     help='truncation exponent: P(N >= m) = 2^(-r m)')
     ap.add_argument('--thin', type=int, default=1,
                     help='Gibbs sweeps per emitted sample')
+    ap.add_argument('--workers', type=int,
+                    help='parallel processes over pasts (default: all cores)')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--pilot', type=int, metavar='LEVELS',
                     help='instead of estimating, print RMS Delta_m over the '
@@ -66,6 +71,11 @@ def main():
     L = len(kernel)
     M = args.past if args.past is not None else max(512, 4 * L)
     print(f'model: sigma={args.sigma} filter={args.filter} L={L} M={M}')
+    pred = predict_entropy_rate(kernel, args.sigma)
+    print(f'predicted rate: {pred["corrected"]:.4f} bits '
+          f'(quantization-corrected; s*={pred["s_star"]:.4g})   '
+          f'high-res Szego: {pred["highres"]:.4f} '
+          f'(sigma_inf={pred["sigma_inf"]:.4g})')
 
     if args.pilot is not None:
         run_pilot(kernel, args, M)
@@ -84,7 +94,7 @@ def main():
     est = estimate_conditional_entropy(
         kernel, args.sigma, past=M, pasts=args.pasts, reps=args.reps,
         n0=args.n0, r=args.r, thin=args.thin, seed=args.seed,
-        progress=progress)
+        progress=progress, workers=args.workers)
     ratio = f'   (ratio vs int16: {16 / est.mean:.3f}x)' if est.mean > 0 else ''
     print(f'\nH(z_next | {M} past samples) = {est.mean:.4f} +/- {est.se:.4f} '
           f'bits/sample{ratio}')
@@ -92,14 +102,21 @@ def main():
           'grows.')
 
 
+def _one_pilot(kernel, sigma, M, thin, n0, levels, seed_seq):
+    rng = np.random.default_rng(seed_seq)
+    return level_corrections(
+        ConditionalChain(kernel, sigma, M, rng, thin).draw, n0, levels)
+
+
 def run_pilot(kernel, args, M):
-    rng = np.random.default_rng(args.seed)
+    seeds = np.random.SeedSequence(args.seed).spawn(args.pasts)
+    workers = args.workers or min(args.pasts, os.cpu_count() or 1)
     print(f'pilot: {args.pasts} pasts, levels 1..{args.pilot}, n0={args.n0}')
-    deltas = np.array([
-        level_corrections(
-            ConditionalChain(kernel, args.sigma, M, rng, args.thin).draw,
-            args.n0, args.pilot)
-        for _ in range(args.pasts)])
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        deltas = np.array(list(pool.map(
+            _one_pilot,
+            *zip(*[(kernel, args.sigma, M, args.thin, args.n0, args.pilot, s)
+                   for s in seeds]))))
     rms = np.sqrt((deltas ** 2).mean(axis=0))
     for m in range(args.pilot):
         note = ''

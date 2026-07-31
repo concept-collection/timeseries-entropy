@@ -2,6 +2,8 @@
 time series: x iid N(0, sigma^2) -> y = h * x -> z = round(y)."""
 
 import math
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import numpy as np
@@ -24,9 +26,16 @@ class Estimate:
     per_past: np.ndarray
 
 
+def _one_past(kernel, sigma, M, thin, n0, r, reps, seed_seq):
+    rng = np.random.default_rng(seed_seq)
+    chain = ConditionalChain(kernel, sigma, M, rng, thin)
+    return float(np.mean(
+        [unbiased_entropy(chain.draw, n0, r, rng) for _ in range(reps)]))
+
+
 def estimate_conditional_entropy(kernel, sigma, past=None, pasts=24, reps=8,
                                  n0=128, r=1.5, thin=1, seed=None,
-                                 progress=None):
+                                 progress=None, workers=None):
     """Unbiased estimate of H(z_{M+1} | z_1..z_M) in bits.
 
     For each of `pasts` independent pasts, a stationary Gibbs chain of
@@ -37,19 +46,38 @@ def estimate_conditional_entropy(kernel, sigma, past=None, pasts=24, reps=8,
 
     past defaults to max(512, 4 * len(kernel)); the estimand decreases toward
     the entropy rate as it grows. progress, if given, is called as
-    progress(i, values) after each past.
+    progress(i, values) after each past finishes (completion order when
+    parallel).
+
+    Pasts run in parallel across `workers` processes (default: all cores).
+    Each past gets its own spawned RNG stream, so a given seed yields the
+    same result for any worker count.
     """
     kernel = np.asarray(kernel, dtype=float)
     M = int(past) if past is not None else max(512, 4 * kernel.size)
-    rng = np.random.default_rng(seed)
+    seeds = np.random.SeedSequence(seed).spawn(pasts)
+    if workers is None:
+        workers = min(pasts, os.cpu_count() or 1)
+    per_past = np.empty(pasts)
     values = []
-    for i in range(pasts):
-        chain = ConditionalChain(kernel, sigma, M, rng, thin)
-        values.append(float(np.mean(
-            [unbiased_entropy(chain.draw, n0, r, rng) for _ in range(reps)])))
-        if progress is not None:
-            progress(i, values)
-    per_past = np.array(values)
+    if workers <= 1:
+        for i in range(pasts):
+            per_past[i] = _one_past(kernel, sigma, M, thin, n0, r, reps,
+                                    seeds[i])
+            values.append(per_past[i])
+            if progress is not None:
+                progress(i, values)
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_one_past, kernel, sigma, M, thin, n0, r, reps,
+                            seeds[i]): i
+                for i in range(pasts)}
+            for done, fut in enumerate(as_completed(futures)):
+                per_past[futures[fut]] = fut.result()
+                values.append(per_past[futures[fut]])
+                if progress is not None:
+                    progress(done, values)
     se = (float(per_past.std(ddof=1) / math.sqrt(len(per_past)))
           if len(per_past) > 1 else float('nan'))
     return Estimate(float(per_past.mean()), se, per_past)

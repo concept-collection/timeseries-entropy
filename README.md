@@ -32,7 +32,10 @@ it there too.
    and despite the autocorrelation, which affects only the variance.
 3. **Average over independent pasts** to get H(z_{M+1} | z_1..z_M) with a
    valid standard error. The only remaining approximation to the entropy rate
-   is the finite window M.
+   is the finite window M. Pasts are independent, so they run in parallel
+   across processes (`workers=`, default all cores); each past has its own
+   spawned RNG stream, making results deterministic per seed for any worker
+   count.
 
 ## Install
 
@@ -73,3 +76,23 @@ Filters match the web app: `none`, `moving-average`, `lowpass`, `bandpass`,
   (narrowband, large-sigma) settings.
 - `--past` sets M; increase it until the estimate stops moving to approach
   the rate.
+- `--workers` caps the process pool (default: all cores).
+
+## Analytic prediction
+
+`timeseries_entropy.theory` predicts the rate from the Fourier modes
+H(f) = sum_j h_j e^(-2 pi i f j) of the kernel; the CLI prints it before
+each run. Szego's theorem gives the Gaussian one-step prediction error
+sigma_inf^2 = sigma^2 exp(int_0^1 ln|H(f)|^2 df) and the high-resolution
+rate (1/2) log2(2 pi e sigma_inf^2), which fails when H(f) has near-zero
+modes (the integral diverges negative while the true rate stays >= 0). Two
+quantization corrections fix it: the observed past is quantized, so the
+uniform roundoff power 1/12 is added to the spectrum before the geometric
+mean — which also keeps the integral finite in stopbands — and the next
+sample is quantized, so the Gaussian-uniform convolution entropy
+G(s) = h(N(0, s^2) + U(-1/2, 1/2)) replaces the Gaussian log term:
+
+    H_rate ~ G(s*),   s*^2 = exp( int_0^1 ln(sigma^2 |H(f)|^2 + 1/12) df ) - 1/12
+
+See [THEORY.md](THEORY.md) for the full derivation, its assumptions, and
+Monte-Carlo validation across filters and sigmas.
