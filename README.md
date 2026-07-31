@@ -9,7 +9,10 @@ The estimand is the conditional entropy H(z_{M+1} | z_1..z_M) in bits, which
 decreases to the entropy rate of z — the true lossless compression limit in
 bits/sample — as the past window M grows beyond the memory of the process.
 
-Companion to [timeseries-compressibility](https://github.com/concept-collection/timeseries-compressibility).
+Companion to [timeseries-compressibility](https://github.com/concept-collection/timeseries-compressibility),
+which carries a hand-synced TypeScript port of this estimator in `src/entropy/`
+(run in the browser from a worker) — when changing the algorithm here, change
+it there too.
 
 ## Method
 
