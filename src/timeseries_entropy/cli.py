@@ -1,0 +1,114 @@
+"""Command-line interface: timeseries-entropy [options]."""
+
+import argparse
+
+import numpy as np
+
+from . import estimate_conditional_entropy, level_corrections, kernels
+from .model import ConditionalChain
+
+
+def design_kernel(args):
+    if args.filter == 'none':
+        return kernels.identity()
+    if args.filter == 'moving-average':
+        return kernels.moving_average(args.width)
+    if args.filter == 'lowpass':
+        if args.high is None:
+            raise SystemExit('lowpass needs --high')
+        return kernels.windowed_sinc_lowpass(args.high / args.rate, args.taps)
+    if args.filter == 'bandpass':
+        if args.low is None or args.high is None:
+            raise SystemExit('bandpass needs --low and --high')
+        return kernels.windowed_sinc_bandpass(
+            args.low / args.rate, args.high / args.rate, args.taps)
+    if args.filter == 'first-difference':
+        return kernels.first_difference()
+    raise ValueError(args.filter)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        prog='timeseries-entropy',
+        description='Unbiased Monte-Carlo estimate of H(z_next | M past '
+                    'samples), in bits, for x iid N(0, sigma^2) -> h * x '
+                    '-> round.')
+    ap.add_argument('--sigma', type=float, required=True,
+                    help='input std, in quantization steps')
+    ap.add_argument('--filter', required=True,
+                    choices=['none', 'moving-average', 'lowpass', 'bandpass',
+                             'first-difference'])
+    ap.add_argument('--low', type=float, help='bandpass low edge, Hz')
+    ap.add_argument('--high', type=float,
+                    help='lowpass cutoff / bandpass high edge, Hz')
+    ap.add_argument('--taps', type=int, default=101,
+                    help='windowed-sinc kernel length')
+    ap.add_argument('--width', type=int, default=8, help='moving-average width')
+    ap.add_argument('--rate', type=float, default=30000, help='sample rate, Hz')
+    ap.add_argument('--past', type=int,
+                    help='conditioning window M (default max(512, 4*L))')
+    ap.add_argument('--pasts', type=int, default=24,
+                    help='independent pasts to average')
+    ap.add_argument('--reps', type=int, default=8,
+                    help='randomized realizations per past')
+    ap.add_argument('--n0', type=int, default=128, help='base block size')
+    ap.add_argument('--r', type=float, default=1.5,
+                    help='truncation exponent: P(N >= m) = 2^(-r m)')
+    ap.add_argument('--thin', type=int, default=1,
+                    help='Gibbs sweeps per emitted sample')
+    ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--pilot', type=int, metavar='LEVELS',
+                    help='instead of estimating, print RMS Delta_m over the '
+                         'pasts for m = 1..LEVELS, to help choose --r')
+    args = ap.parse_args()
+
+    kernel = design_kernel(args)
+    L = len(kernel)
+    M = args.past if args.past is not None else max(512, 4 * L)
+    print(f'model: sigma={args.sigma} filter={args.filter} L={L} M={M}')
+
+    if args.pilot is not None:
+        run_pilot(kernel, args, M)
+        return
+
+    print(f'{args.pasts} pasts x {args.reps} reps, n0={args.n0} r={args.r} '
+          f'thin={args.thin}')
+
+    def progress(i, values):
+        mean = float(np.mean(values))
+        se = (float(np.std(values, ddof=1) / np.sqrt(len(values)))
+              if len(values) > 1 else float('nan'))
+        print(f'  past {i + 1:3d}/{args.pasts}: H = {values[-1]:.4f}   '
+              f'running mean {mean:.4f} +/- {se:.4f}')
+
+    est = estimate_conditional_entropy(
+        kernel, args.sigma, past=M, pasts=args.pasts, reps=args.reps,
+        n0=args.n0, r=args.r, thin=args.thin, seed=args.seed,
+        progress=progress)
+    ratio = f'   (ratio vs int16: {16 / est.mean:.3f}x)' if est.mean > 0 else ''
+    print(f'\nH(z_next | {M} past samples) = {est.mean:.4f} +/- {est.se:.4f} '
+          f'bits/sample{ratio}')
+    print('note: an upper bound on the entropy rate that tightens as --past '
+          'grows.')
+
+
+def run_pilot(kernel, args, M):
+    rng = np.random.default_rng(args.seed)
+    print(f'pilot: {args.pasts} pasts, levels 1..{args.pilot}, n0={args.n0}')
+    deltas = np.array([
+        level_corrections(
+            ConditionalChain(kernel, args.sigma, M, rng, args.thin).draw,
+            args.n0, args.pilot)
+        for _ in range(args.pasts)])
+    rms = np.sqrt((deltas ** 2).mean(axis=0))
+    for m in range(args.pilot):
+        note = ''
+        if m > 0 and rms[m] > 0:
+            note = f'   decay exponent {np.log2(rms[m - 1] / rms[m]) * 2:.2f}'
+        print(f'  m={m + 1}: rms Delta = {rms[m]:.5f}{note}')
+    print('choose r safely below the E[Delta^2] decay exponent (and > 1); '
+          'r=1.5 suits decay near 2.')
+
+
+if __name__ == '__main__':
+    main()
