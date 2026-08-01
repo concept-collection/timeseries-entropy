@@ -78,6 +78,24 @@ Filters match the web app: `none`, `moving-average`, `lowpass`, `bandpass`,
   the rate.
 - `--workers` caps the process pool (default: all cores).
 
+## Cached estimates
+
+The `estimates` branch caches a grid of estimates so the common settings need
+not be recomputed: four filters (`none`, moving-average 8, lowpass 3000 Hz,
+bandpass 300-6000 Hz at 30 kHz) crossed with sigma in {1, 2, 4, 8, 16, 32}.
+
+    https://raw.githubusercontent.com/concept-collection/timeseries-entropy/estimates/estimates.json
+
+Dispatch the **estimates** workflow to add to it. Each run draws 8 fresh,
+independent pasts per cell, appends one record per cell to `runs.jsonl`, and
+rebuilds `estimates.json` by pooling every past ever drawn — so the means keep
+tightening the more often it runs. The grid lives in
+[scripts/grid.py](scripts/grid.py); adding a cell does not invalidate the
+cache, since each record stores its own parameters. To fill the cache locally
+instead:
+
+    python scripts/run_sweep.py --data-dir data
+
 ## Analytic prediction
 
 `timeseries_entropy.theory` predicts the rate from the Fourier modes

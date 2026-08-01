@@ -1,0 +1,65 @@
+name: estimates
+
+# Runs the parameter grid in scripts/grid.py and caches the results on the
+# `estimates` branch. Each dispatch adds fresh, independent pasts to every cell
+# and rebuilds the pooled means, so repeated runs tighten the error bars.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One sweep at a time — two concurrent dispatches would race on the push.
+concurrency:
+  group: estimates
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install -e .
+
+      - name: Check out the estimates branch (creating it if absent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          cd data
+          git init -q
+          git remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth 1 origin estimates; then
+            git checkout -q -B estimates FETCH_HEAD
+            echo "continuing $(wc -l < runs.jsonl) cached records"
+          else
+            git checkout -q -b estimates
+            echo "estimates branch does not exist yet — starting it"
+          fi
+
+      - name: Run the sweep
+        run: python scripts/run_sweep.py --data-dir data
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          cd data
+          git add -A
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+            exit 0
+          fi
+          git \
+            -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "estimates: run ${GITHUB_RUN_NUMBER} from ${GITHUB_SHA:0:7}"
+          git push -q origin estimates
