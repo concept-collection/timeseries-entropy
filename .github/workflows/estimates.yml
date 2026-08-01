@@ -22,7 +22,10 @@ concurrency:
 jobs:
   sweep:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Auto-thinning makes the slow-mixing cells legitimately expensive, and a
+    # deep truncation-level draw can add tens of minutes on top; a run that
+    # exceeds the timeout pushes nothing, which is safe but wasted.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +47,7 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           if git fetch -q --depth 1 origin estimates; then
             git checkout -q -B estimates FETCH_HEAD
-            echo "continuing $(wc -l < runs.jsonl) cached records"
+            echo "continuing $(wc -l < runs.jsonl 2>/dev/null || echo 0) cached records"
           else
             git checkout -q -b estimates
             echo "estimates branch does not exist yet — starting it"

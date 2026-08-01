@@ -39,6 +39,18 @@ def test_gibbs_preserves_constraints():
     assert np.array_equal(np.floor(y + 0.5), z0)
 
 
+def test_auto_thin_deterministic_across_workers():
+    kwargs = dict(sigma=4.0, past=32, pasts=3, reps=4, n0=32, thin='auto',
+                  probe=64, seed=9)
+    kernel = np.full(4, 0.25)
+    a = estimate_conditional_entropy(kernel, workers=1, **kwargs)
+    b = estimate_conditional_entropy(kernel, workers=3, **kwargs)
+    assert np.array_equal(a.per_past, b.per_past)
+    assert np.array_equal(a.thin, b.thin)
+    assert np.array_equal(a.reps, b.reps)
+    assert np.all(a.thin >= 1) and np.all(a.reps >= 1)
+
+
 def test_no_filter_matches_exact_entropy():
     # kernel [1]: z is iid round(N(0, sigma^2)), so the conditional entropy
     # equals the exact marginal entropy for any past length.

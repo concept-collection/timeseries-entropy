@@ -30,6 +30,10 @@ RUNS = 'runs.jsonl'
 SUMMARY = 'estimates.json'
 
 
+def _thin_arg(s):
+    return s if s == 'auto' else int(s)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--data-dir', required=True,
@@ -37,10 +41,12 @@ def main():
     ap.add_argument('--pasts', type=int, default=8,
                     help='independent pasts added per cell per run')
     ap.add_argument('--reps', type=int, default=8,
-                    help='randomized realizations averaged per past')
+                    help='per-past realization budget at thin=1')
     ap.add_argument('--n0', type=int, default=128)
     ap.add_argument('--r', type=float, default=1.5)
-    ap.add_argument('--thin', type=int, default=1)
+    ap.add_argument('--thin', type=_thin_arg, default='auto',
+                    help="Gibbs sweeps per draw, or 'auto' to match each "
+                         "chain's measured autocorrelation time (default)")
     ap.add_argument('--workers', type=int)
     ap.add_argument('--only', help='substring of cell id, for local testing')
     args = ap.parse_args()
@@ -83,6 +89,14 @@ def main():
             'thin': args.thin,
             'sum': float(v.sum()),
             'sumsq': float((v ** 2).sum()),
+            # Per-past forensics: the values themselves (so outliers are
+            # visible directly), the resolved thinning and realization
+            # counts, and each probe's autocorrelation-time estimate.
+            'values': [float(x) for x in v],
+            'thin_resolved': [int(t) for t in est.thin],
+            'reps_resolved': [int(k) for k in est.reps],
+            'tau': [None if math.isnan(t) else round(float(t), 1)
+                    for t in est.tau],
             'seed': seed,
             'run_index': run_index,
             'utc': utc_now(),
@@ -90,8 +104,10 @@ def main():
             'workflow_run': os.environ.get('GITHUB_RUN_ID'),
         }
         new.append(rec)
+        thins = est.thin
         print(f'  [{i + 1:2d}/{len(cells)}] {cid:<16} '
               f'H = {est.mean:.4f} +/- {est.se:.4f}   '
+              f'thin {int(thins.min())}-{int(thins.max())}   '
               f'({time.time() - t0:.0f}s)', flush=True)
 
     append_records(data_dir / RUNS, new)
@@ -197,8 +213,10 @@ pasts, appends one record per cell to `runs.jsonl`, and rebuilds
 `estimates.json` from the full log, so the means tighten run after run.
 
 - **`runs.jsonl`** — append-only, one JSON object per (cell, dispatch): the
-  cell's parameters, how many pasts it contributed, their sum and sum of
-  squares, the seed, and the code commit that produced them.
+  cell's parameters, the per-past values with their sum and sum of squares,
+  the per-past resolved Gibbs thinning and probe autocorrelation times
+  (`thin='auto'` matches thinning to each chain's measured mixing), the
+  seed, and the code commit that produced them.
 - **`estimates.json`** — pooled `mean` and `se` per cell over every past ever
   drawn for it, alongside the analytic `predicted` rate for comparison.
 

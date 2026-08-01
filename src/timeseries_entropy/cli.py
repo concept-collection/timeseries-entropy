@@ -6,9 +6,14 @@ from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 
-from . import estimate_conditional_entropy, level_corrections, kernels
+from . import (estimate_conditional_entropy, level_corrections, kernels,
+               _resolve_thin)
 from .model import ConditionalChain
 from .theory import predict_entropy_rate
+
+
+def _thin_arg(s):
+    return s if s == 'auto' else int(s)
 
 
 def design_kernel(args):
@@ -53,12 +58,13 @@ def main():
     ap.add_argument('--pasts', type=int, default=24,
                     help='independent pasts to average')
     ap.add_argument('--reps', type=int, default=8,
-                    help='randomized realizations per past')
+                    help='per-past realization budget at thin=1')
     ap.add_argument('--n0', type=int, default=128, help='base block size')
     ap.add_argument('--r', type=float, default=1.5,
                     help='truncation exponent: P(N >= m) = 2^(-r m)')
-    ap.add_argument('--thin', type=int, default=1,
-                    help='Gibbs sweeps per emitted sample')
+    ap.add_argument('--thin', type=_thin_arg, default='auto',
+                    help="Gibbs sweeps per emitted sample, or 'auto' "
+                         '(default) to match the measured mixing per past')
     ap.add_argument('--workers', type=int,
                     help='parallel processes over pasts (default: all cores)')
     ap.add_argument('--seed', type=int, default=0)
@@ -95,6 +101,10 @@ def main():
         kernel, args.sigma, past=M, pasts=args.pasts, reps=args.reps,
         n0=args.n0, r=args.r, thin=args.thin, seed=args.seed,
         progress=progress, workers=args.workers)
+    if args.thin == 'auto':
+        print(f'resolved thin {est.thin.min()}-{est.thin.max()} '
+              f'(tau {est.tau.min():.1f}-{est.tau.max():.1f}), '
+              f'{est.reps.min()}-{est.reps.max()} reps/past')
     ratio = f'   (ratio vs int16: {16 / est.mean:.3f}x)' if est.mean > 0 else ''
     print(f'\nH(z_next | {M} past samples) = {est.mean:.4f} +/- {est.se:.4f} '
           f'bits/sample{ratio}')
@@ -104,19 +114,25 @@ def main():
 
 def _one_pilot(kernel, sigma, M, thin, n0, levels, seed_seq):
     rng = np.random.default_rng(seed_seq)
-    return level_corrections(
-        ConditionalChain(kernel, sigma, M, rng, thin).draw, n0, levels)
+    chain = ConditionalChain(kernel, sigma, M, rng, 1)
+    t, _ = _resolve_thin(chain, thin, probe=512, thin_cap=64)
+    return t, level_corrections(chain.draw, n0, levels)
 
 
 def run_pilot(kernel, args, M):
     seeds = np.random.SeedSequence(args.seed).spawn(args.pasts)
     workers = args.workers or min(args.pasts, os.cpu_count() or 1)
-    print(f'pilot: {args.pasts} pasts, levels 1..{args.pilot}, n0={args.n0}')
+    print(f'pilot: {args.pasts} pasts, levels 1..{args.pilot}, n0={args.n0}, '
+          f'thin={args.thin}')
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        deltas = np.array(list(pool.map(
+        results = list(pool.map(
             _one_pilot,
             *zip(*[(kernel, args.sigma, M, args.thin, args.n0, args.pilot, s)
-                   for s in seeds]))))
+                   for s in seeds])))
+    thins = np.array([t for t, _ in results])
+    deltas = np.array([d for _, d in results])
+    if args.thin == 'auto':
+        print(f'  resolved thin {thins.min()}-{thins.max()}')
     rms = np.sqrt((deltas ** 2).mean(axis=0))
     for m in range(args.pilot):
         note = ''

@@ -34,7 +34,9 @@ class ConditionalChain:
     themselves an exact draw from p(x | z), so the Gibbs chain starts in
     stationarity — no burn-in bias, only autocorrelation. draw(k) advances the
     chain k steps (thin sweeps each) and returns the k sampled z_{M+1} values,
-    each marginally distributed exactly as z_{M+1} | z_1..z_M.
+    each marginally distributed exactly as z_{M+1} | z_1..z_M. thin may be
+    reassigned between draws (e.g. probe at thin=1, then thin by the measured
+    autocorrelation time); stationarity is unaffected.
 
     Each Gibbs conditional x_i | rest is N(0, sigma^2) truncated to the
     interval read off the <= L constraint boxes x_i appears in. Coordinates a

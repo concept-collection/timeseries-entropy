@@ -94,3 +94,30 @@ def level_corrections(draw, n0=128, levels=6):
     """
     _, deltas = _telescope(draw, n0, levels)
     return np.array(deltas)
+
+
+def integrated_autocorr_time(x, c=5.0):
+    """Integrated autocorrelation time of a stationary sequence, in samples.
+
+    tau = 1 + 2 sum_k rho_k with Sokal's automatic windowing: the sum stops
+    at the smallest lag W >= c * tau(W). Resolving tau needs len(x) >> c *
+    tau; longer times saturate near len(x) / (2 c), so cap the result when
+    the sequence may mix slower than the probe can see. Returns >= 1.
+    """
+    x = np.asarray(x, dtype=float)
+    n = x.size
+    if n < 2:
+        return 1.0
+    x = x - x.mean()
+    denom = float(x @ x)
+    if denom == 0.0:
+        return 1.0
+    f = np.fft.rfft(x, 2 * n)
+    acf = np.fft.irfft(f * f.conj())[:n] / denom
+    csum = np.cumsum(acf[1:n // 2 + 1])
+    tau = 1.0
+    for w in range(1, csum.size + 1):
+        tau = 1.0 + 2.0 * float(csum[w - 1])
+        if w >= c * tau:
+            break
+    return max(tau, 1.0)

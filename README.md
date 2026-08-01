@@ -22,7 +22,10 @@ it there too.
    stationarity — no burn-in bias. Each Gibbs conditional is a box-truncated
    normal; after each sweep the free tail latent is drawn fresh, emitting one
    exact sample of z_{M+1}. The samples form a stationary, autocorrelated
-   discrete chain.
+   discrete chain. By default each chain is auto-thinned: a short probe
+   measures the draws' integrated autocorrelation time tau and the chain
+   then takes ceil(tau) sweeps per emitted sample (capped), so downstream
+   levels see approximately independent draws.
 2. **Unbiased entropy of the chain's marginal.** Plug-in entropies of blocks
    whose sizes double per level are combined by Rhee–Glynn randomized
    telescoping with antithetic half-block corrections
@@ -71,9 +74,17 @@ Filters match the web app: `none`, `moving-average`, `lowpass`, `bandpass`,
   expected work needs r > 1; finite variance needs E[Delta_m^2] to decay
   faster than 2^(-r m). Run `--pilot 6` to see the RMS Delta_m decay before
   trusting a value.
-- `n0` (default 128) is the base block size; `thin` inserts extra Gibbs
-  sweeps per emitted sample to cut autocorrelation for slowly mixing
-  (narrowband, large-sigma) settings.
+- `thin` (default `'auto'`) inserts extra Gibbs sweeps per emitted sample to
+  cut autocorrelation. This is not optional for slowly mixing (narrowband,
+  large-sigma) settings: without thinning their Delta_m decay too slowly for
+  r = 1.5 and the estimator's variance is infinite — still unbiased, but a
+  rare deep truncation level then returns a value of hundreds of bits (one
+  such draw was traced producing 305 bits on the bandpass sigma=32 grid
+  cell). `'auto'` probes each chain's integrated autocorrelation time and
+  thins by ceil(tau), capped at `thin_cap` (default 64); `reps` then acts as
+  a per-past budget (realizations = max(1, reps / thin)), so per-past cost
+  stays roughly flat and accuracy accumulates over pasts instead.
+- `n0` (default 128) is the base block size.
 - `--past` sets M; increase it until the estimate stops moving to approach
   the rate.
 - `--workers` caps the process pool (default: all cores).
@@ -88,9 +99,12 @@ bandpass 300-6000 Hz at 30 kHz) crossed with sigma in {1, 2, 4, 8, 16, 32}.
 
 The **estimates** workflow fills it every two hours, and can also be dispatched
 by hand. Each run draws 8 fresh, independent pasts per cell, appends one record
-per cell to `runs.jsonl`, and
+per cell to `runs.jsonl` (including the per-past values and resolved
+thinning, so any outlier can be traced to its seed and replayed), and
 rebuilds `estimates.json` by pooling every past ever drawn — so the means keep
-tightening the more often it runs. The grid lives in
+tightening the more often it runs. The cache was reset on 2026-08-01: draws
+made before auto-thinning landed had heavy-tailed outliers on the
+narrowband large-sigma cells (see Tuning) and were discarded. The grid lives in
 [scripts/grid.py](scripts/grid.py); adding a cell does not invalidate the
 cache, since each record stores its own parameters. To fill the cache locally
 instead:

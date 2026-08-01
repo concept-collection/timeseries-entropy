@@ -3,7 +3,8 @@ import math
 import numpy as np
 import pytest
 
-from timeseries_entropy import plugin_entropy, unbiased_entropy, level_corrections
+from timeseries_entropy import (plugin_entropy, unbiased_entropy,
+                                level_corrections, integrated_autocorr_time)
 
 
 def test_plugin_entropy_exact():
@@ -44,6 +45,27 @@ def test_unbiased_on_autocorrelated_chain():
     se = vals.std(ddof=1) / math.sqrt(len(vals))
     assert abs(vals.mean() - 1.0) < 5 * se
     assert se < 0.02
+
+
+def test_autocorr_time_iid():
+    rng = np.random.default_rng(6)
+    tau = integrated_autocorr_time(rng.integers(0, 4, size=4096))
+    assert 0.8 < tau < 1.5
+
+
+def test_autocorr_time_sticky_markov():
+    # Two-state chain flipping w.p. eps: rho_k = (1 - 2 eps)^k, so
+    # tau = 1 + 2 rho / (1 - rho) = 19 at eps = 0.05.
+    rng = np.random.default_rng(7)
+    flips = rng.random(200000) < 0.05
+    x = np.cumsum(flips) % 2
+    tau = integrated_autocorr_time(x)
+    assert 12 < tau < 28
+
+
+def test_autocorr_time_degenerate():
+    assert integrated_autocorr_time([3]) == 1.0
+    assert integrated_autocorr_time([2, 2, 2, 2]) == 1.0
 
 
 def test_level_corrections_decay():
