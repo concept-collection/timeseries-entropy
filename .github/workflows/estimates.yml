@@ -1,11 +1,15 @@
 name: estimates
 
 # Runs the parameter grid in scripts/grid.py and caches the results on the
-# `estimates` branch. Each dispatch adds fresh, independent pasts to every cell
-# and rebuilds the pooled means, so repeated runs tighten the error bars.
+# `estimates` branch. Each run adds fresh, independent pasts to every cell and
+# rebuilds the pooled means, so repeated runs tighten the error bars.
 
 on:
   workflow_dispatch:
+  schedule:
+    # Every two hours, off the top of the hour — GitHub sheds scheduled load at
+    # :00. Only the copy of this file on the default branch is scheduled.
+    - cron: '23 */2 * * *'
 
 permissions:
   contents: write

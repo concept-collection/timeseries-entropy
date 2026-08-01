@@ -86,8 +86,9 @@ bandpass 300-6000 Hz at 30 kHz) crossed with sigma in {1, 2, 4, 8, 16, 32}.
 
     https://raw.githubusercontent.com/concept-collection/timeseries-entropy/estimates/estimates.json
 
-Dispatch the **estimates** workflow to add to it. Each run draws 8 fresh,
-independent pasts per cell, appends one record per cell to `runs.jsonl`, and
+The **estimates** workflow fills it every two hours, and can also be dispatched
+by hand. Each run draws 8 fresh, independent pasts per cell, appends one record
+per cell to `runs.jsonl`, and
 rebuilds `estimates.json` by pooling every past ever drawn — so the means keep
 tightening the more often it runs. The grid lives in
 [scripts/grid.py](scripts/grid.py); adding a cell does not invalidate the
